@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RunnerCoach - Nhật ký tập luyện</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/recharts/umd/Recharts.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.0.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.0.2/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore-compat.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .recharts-cartesian-grid-horizontal line, .recharts-cartesian-grid-vertical line { stroke: #f1f5f9; }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script>
+        // Cấu hình Firebase (Lưu ý: Các giá trị này được nhúng tự động khi chạy)
+        // Nếu bạn chạy file này độc lập, bạn có thể thay thế bằng cấu hình Firebase cá nhân của mình
+        const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
+        const appId = window.__app_id || 'default-runner-app';
+
+        // Khởi tạo Firebase phiên bản Compat để chạy trên trình duyệt dễ dàng
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        const { useState, useEffect, useMemo } = React;
+        const { 
+            LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area,
+            BarChart, Bar, Legend 
+        } = Recharts;
+
+        // Icons Helper
+        const Icon = ({ name, size = 20, className = "" }) => {
+            return React.createElement('i', { 
+                'data-lucide': name, 
+                style: { width: size, height: size },
+                className: `inline-block ${className}`
+            });
+        };
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [history, setHistory] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [submitting, setSubmitting] = useState(false);
+            const [formData, setFormData] = useState({ distance: '', pace: '', weight: '67', carbs: '', protein: '' });
+
+            useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged(async (u) => {
+                    if (u) {
+                        setUser(u);
+                    } else {
+                        try {
+                            await auth.signInAnonymously();
+                        } catch (e) { console.error(e); }
+                    }
+                });
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+                const logsRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('logs');
+                const unsubscribe = logsRef.onSnapshot((snapshot) => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setHistory(data.sort((a, b) => new Date(a.date) - new Date(b.date)));
+                    setLoading(false);
+                    setTimeout(() => lucide.createIcons(), 100);
+                });
+                return () => unsubscribe();
+            }, [user]);
+
+            useEffect(() => { lucide.createIcons(); }, [activeTab, loading]);
+
+            const stats = useMemo(() => {
+                if (history.length === 0) return { totalDist: 0, avgWeight: 67, lastPace: '--' };
+                const totalDist = history.reduce((acc, curr) => acc + (Number(curr.distance) || 0), 0);
+                const lastEntry = history[history.length - 1];
+                return { totalDist: totalDist.toFixed(1), avgWeight: lastEntry.weight, lastPace: lastEntry.pace };
+            }, [history]);
+
+            const handleAddData = async (e) => {
+                e.preventDefault();
+                setSubmitting(true);
+                const newData = {
+                    date: new Date().toISOString().split('T')[0],
+                    distance: parseFloat(formData.distance) || 0,
+                    pace: formData.pace || "0:00",
+                    weight: parseFloat(formData.weight) || 67,
+                    carbs: parseFloat(formData.carbs) || 0,
+                    protein: parseFloat(formData.protein) || 0,
+                    timestamp: Date.now()
+                };
+                try {
+                    await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('logs').add(newData);
+                    setFormData({ distance: '', pace: '', weight: '67', carbs: '', protein: '' });
+                    setActiveTab('dashboard');
+                } catch (err) { alert("Lỗi khi lưu!"); }
+                setSubmitting(false);
+            };
+
+            if (loading) return (
+                <div className="flex h-screen items-center justify-center">
+                    <div className="text-center">
+                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto mb-4"></div>
+                        <p className="text-slate-500">Đang tải dữ liệu từ Cloud...</p>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen pb-10">
+                    <nav className="bg-white border-b sticky top-0 z-20 px-4 h-16 flex items-center justify-between shadow-sm">
+                        <div className="flex items-center gap-2">
+                            <div className="bg-orange-500 p-2 rounded-lg"><Icon name="activity" className="text-white" /></div>
+                            <span className="font-extrabold text-xl">Runner<span className="text-orange-500">Coach</span></span>
+                        </div>
+                        <div className="flex gap-1 bg-slate-100 p-1 rounded-full">
+                            <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-1.5 rounded-full text-xs font-bold transition ${activeTab === 'dashboard' ? 'bg-white shadow text-orange-600' : 'text-slate-500'}`}>TỔNG QUAN</button>
+                            <button onClick={() => setActiveTab('log')} className={`px-4 py-1.5 rounded-full text-xs font-bold transition ${activeTab === 'log' ? 'bg-white shadow text-orange-600' : 'text-slate-500'}`}>GHI CHÉP</button>
+                        </div>
+                    </nav>
+
+                    <main className="max-w-5xl mx-auto p-4 mt-4 space-y-6">
+                        {activeTab === 'dashboard' ? (
+                            <>
+                                <div className="bg-white p-6 rounded-2xl border-l-4 border-orange-500 shadow-sm flex items-center gap-4">
+                                    <div className="bg-orange-50 p-3 rounded-full"><Icon name="award" className="text-orange-600" /></div>
+                                    <p className="font-medium text-slate-700">Duy trì Pace 6:30 và bổ sung Carbs trước bài Long Run nhé!</p>
+                                </div>
+
+                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                                    <StatBox label="Quãng đường" value={`${stats.totalDist} km`} icon="map" color="blue" />
+                                    <StatBox label="Cân nặng" value={`${stats.avgWeight} kg`} icon="trending-up" color="green" />
+                                    <StatBox label="Pace cuối" value={stats.lastPace} icon="zap" color="orange" />
+                                    <StatBox label="Số ngày" value={history.length} icon="calendar" color="purple" />
+                                </div>
+
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                    <div className="bg-white p-6 rounded-2xl border h-80 shadow-sm">
+                                        <h3 className="font-bold text-sm mb-4 uppercase text-slate-400 tracking-widest">Khối lượng chạy</h3>
+                                        <ResponsiveContainer width="100%" height="90%">
+                                            <AreaChart data={history}>
+                                                <XAxis dataKey="date" hide />
+                                                <YAxis fontSize={10} axisLine={false} tickLine={false} />
+                                                <Tooltip />
+                                                <Area type="monotone" dataKey="distance" stroke="#f97316" fill="#fff7ed" strokeWidth={3} />
+                                            </AreaChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                    <div className="bg-white p-6 rounded-2xl border h-80 shadow-sm">
+                                        <h3 className="font-bold text-sm mb-4 uppercase text-slate-400 tracking-widest">Cân nặng</h3>
+                                        <ResponsiveContainer width="100%" height="90%">
+                                            <LineChart data={history}>
+                                                <XAxis dataKey="date" hide />
+                                                <YAxis domain={['dataMin - 1', 'dataMax + 1']} fontSize={10} axisLine={false} tickLine={false} />
+                                                <Tooltip />
+                                                <Line type="monotone" dataKey="weight" stroke="#22c55e" strokeWidth={3} dot={{fill:'#22c55e'}} />
+                                            </LineChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                </div>
+                            </>
+                        ) : (
+                            <div className="max-w-xl mx-auto bg-white p-8 rounded-3xl shadow-xl border">
+                                <h2 className="text-2xl font-black mb-6">Log hôm nay</h2>
+                                <form onSubmit={handleAddData} className="space-y-4">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase">Km chạy</label>
+                                            <input type="number" step="0.1" className="w-full p-3 bg-slate-50 rounded-xl outline-none focus:ring-2 ring-orange-500" value={formData.distance} onChange={e => setFormData({...formData, distance: e.target.value})} />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase">Pace</label>
+                                            <input type="text" className="w-full p-3 bg-slate-50 rounded-xl outline-none focus:ring-2 ring-orange-500" placeholder="6:30" value={formData.pace} onChange={e => setFormData({...formData, pace: e.target.value})} />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase">Cân nặng (kg)</label>
+                                        <input type="number" step="0.1" className="w-full p-3 bg-slate-50 rounded-xl outline-none focus:ring-2 ring-orange-500" value={formData.weight} onChange={e => setFormData({...formData, weight: e.target.value})} />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-blue-500 uppercase">Carbs (g)</label>
+                                            <input type="number" className="w-full bg-transparent text-xl font-bold outline-none" value={formData.carbs} onChange={e => setFormData({...formData, carbs: e.target.value})} />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-red-500 uppercase">Protein (g)</label>
+                                            <input type="number" className="w-full bg-transparent text-xl font-bold outline-none" value={formData.protein} onChange={e => setFormData({...formData, protein: e.target.value})} />
+                                        </div>
+                                    </div>
+                                    <button className="w-full bg-slate-900 text-white font-bold py-4 rounded-2xl hover:bg-black transition disabled:opacity-50" disabled={submitting}>
+                                        {submitting ? "Đang lưu..." : "LƯU VÀO ĐÁM MÂY"}
+                                    </button>
+                                </form>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        };
+
+        const StatBox = ({ label, value, icon, color }) => {
+            const colors = {
+                blue: 'bg-blue-50 text-blue-600',
+                green: 'bg-green-50 text-green-600',
+                orange: 'bg-orange-50 text-orange-600',
+                purple: 'bg-purple-50 text-purple-600',
+            };
+            return (
+                <div className="bg-white p-4 rounded-2xl border shadow-sm">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center mb-3 ${colors[color]}`}>
+                        <Icon name={icon} size={16} />
+                    </div>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">{label}</p>
+                    <p className="text-xl font-black text-slate-800">{value}</p>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>
